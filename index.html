@@ -1,0 +1,1485 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Interactive Reptile Cursor</title>
+
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: none;
+
+    background:
+        radial-gradient(
+            circle at 50% 50%,
+            #101812 0%,
+            #070b08 45%,
+            #020403 100%
+        );
+}
+
+canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+}
+
+.hint {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+
+    transform: translate(-50%, -50%);
+
+    color: rgba(255,255,255,.28);
+
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 4px;
+
+    pointer-events: none;
+
+    transition:
+        opacity 1s ease;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div class="hint" id="hint">
+    MOVE YOUR CURSOR
+</div>
+
+<script>
+
+/* ============================================================
+   CANVAS
+============================================================ */
+
+const canvas =
+    document.getElementById("canvas");
+
+const ctx =
+    canvas.getContext("2d");
+
+let width =
+    window.innerWidth;
+
+let height =
+    window.innerHeight;
+
+let dpr =
+    Math.min(
+        window.devicePixelRatio || 1,
+        2
+    );
+
+
+function resize() {
+
+    width = window.innerWidth;
+    height = window.innerHeight;
+
+    dpr =
+        Math.min(
+            window.devicePixelRatio || 1,
+            2
+        );
+
+    canvas.width =
+        width * dpr;
+
+    canvas.height =
+        height * dpr;
+
+    canvas.style.width =
+        width + "px";
+
+    canvas.style.height =
+        height + "px";
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+}
+
+
+resize();
+
+window.addEventListener(
+    "resize",
+    resize
+);
+
+
+/* ============================================================
+   MOUSE PHYSICS
+============================================================ */
+
+const mouse = {
+
+    x: width / 2,
+    y: height / 2,
+
+    targetX: width / 2,
+    targetY: height / 2,
+
+    velocityX: 0,
+    velocityY: 0,
+
+    speed: 0
+};
+
+
+let lastMouseX =
+    mouse.x;
+
+let lastMouseY =
+    mouse.y;
+
+
+window.addEventListener(
+    "mousemove",
+    event => {
+
+        mouse.targetX =
+            event.clientX;
+
+        mouse.targetY =
+            event.clientY;
+
+        document
+            .getElementById("hint")
+            .style.opacity = "0";
+    }
+);
+
+
+/* ============================================================
+   REPTILE SETTINGS
+============================================================ */
+
+const SEGMENTS = 34;
+
+
+/*
+    Distance between body segments.
+
+    This is deliberately consistent so
+    the reptile doesn't compress when turning.
+*/
+
+const SEGMENT_DISTANCE = 7.2;
+
+
+/*
+    How quickly the head catches the cursor.
+*/
+
+const HEAD_STIFFNESS = 12;
+
+
+/*
+    Damping prevents jitter.
+*/
+
+const HEAD_DAMPING = 5.5;
+
+
+/*
+    Maximum head speed.
+*/
+
+const MAX_SPEED = 950;
+
+
+/* ============================================================
+   BODY
+============================================================ */
+
+const body = [];
+
+
+for (
+    let i = 0;
+    i < SEGMENTS;
+    i++
+) {
+
+    /*
+        IMPORTANT STARTUP FIX
+
+        Instead of putting every segment
+        directly on top of the cursor,
+        the body is created in a straight
+        line behind the head.
+    */
+
+    const distance =
+        i *
+        SEGMENT_DISTANCE;
+
+
+    body.push({
+
+        x:
+            mouse.x -
+            distance,
+
+        y:
+            mouse.y,
+
+        vx: 0,
+        vy: 0,
+
+        angle: 0,
+
+        size:
+            Math.max(
+                3.2,
+                10.5 -
+                i * 0.22
+            )
+    });
+}
+
+
+/* ============================================================
+   INITIAL STATE
+============================================================ */
+
+let initialized = false;
+
+let time = 0;
+
+
+/* ============================================================
+   UTILITY
+============================================================ */
+
+function clamp(
+    value,
+    min,
+    max
+) {
+
+    return Math.max(
+        min,
+        Math.min(
+            max,
+            value
+        )
+    );
+}
+
+
+function lerp(
+    a,
+    b,
+    t
+) {
+
+    return a +
+        (b - a) * t;
+}
+
+
+/* ============================================================
+   MAIN ANIMATION
+============================================================ */
+
+let previousTime =
+    performance.now();
+
+
+function animate(now) {
+
+    requestAnimationFrame(
+        animate
+    );
+
+
+    /*
+        Delta-time physics.
+
+        This makes movement much more
+        consistent at different FPS.
+    */
+
+    let dt =
+        (now - previousTime) /
+        1000;
+
+    previousTime = now;
+
+
+    dt =
+        Math.min(
+            dt,
+            0.033
+        );
+
+
+    time += dt;
+
+
+    /* ========================================================
+       HEAD SPRING PHYSICS
+    ======================================================== */
+
+    const head =
+        body[0];
+
+
+    const dx =
+        mouse.targetX -
+        head.x;
+
+    const dy =
+        mouse.targetY -
+        head.y;
+
+
+    /*
+        Spring force.
+    */
+
+    const ax =
+        dx *
+        HEAD_STIFFNESS -
+        head.vx *
+        HEAD_DAMPING;
+
+
+    const ay =
+        dy *
+        HEAD_STIFFNESS -
+        head.vy *
+        HEAD_DAMPING;
+
+
+    head.vx +=
+        ax * dt;
+
+    head.vy +=
+        ay * dt;
+
+
+    /*
+        Limit speed so a sudden
+        mouse teleport doesn't
+        launch the reptile.
+    */
+
+    const headSpeed =
+        Math.sqrt(
+            head.vx * head.vx +
+            head.vy * head.vy
+        );
+
+
+    if (
+        headSpeed >
+        MAX_SPEED
+    ) {
+
+        const scale =
+            MAX_SPEED /
+            headSpeed;
+
+        head.vx *= scale;
+        head.vy *= scale;
+    }
+
+
+    head.x +=
+        head.vx * dt;
+
+    head.y +=
+        head.vy * dt;
+
+
+    /* ========================================================
+       HEAD ANGLE
+    ======================================================== */
+
+    if (
+        Math.abs(head.vx) +
+        Math.abs(head.vy) >
+        0.1
+    ) {
+
+        head.angle =
+            Math.atan2(
+                head.vy,
+                head.vx
+            );
+    }
+
+
+    /* ========================================================
+       BODY FOLLOW PHYSICS
+    ======================================================== */
+
+    for (
+        let i = 1;
+        i < SEGMENTS;
+        i++
+    ) {
+
+        const segment =
+            body[i];
+
+        const previous =
+            body[i - 1];
+
+
+        const dx =
+            previous.x -
+            segment.x;
+
+        const dy =
+            previous.y -
+            segment.y;
+
+
+        const distance =
+            Math.sqrt(
+                dx * dx +
+                dy * dy
+            );
+
+
+        /*
+            Prevent division problems
+            when two segments overlap.
+        */
+
+        if (
+            distance < 0.0001
+        ) {
+
+            continue;
+        }
+
+
+        const angle =
+            Math.atan2(
+                dy,
+                dx
+            );
+
+
+        /*
+            Target position exactly
+            behind the previous segment.
+        */
+
+        const targetX =
+            previous.x -
+            Math.cos(angle) *
+            SEGMENT_DISTANCE;
+
+
+        const targetY =
+            previous.y -
+            Math.sin(angle) *
+            SEGMENT_DISTANCE;
+
+
+        /*
+            Smooth spring-like following.
+
+            This is much better than directly
+            snapping each segment into place.
+        */
+
+        const follow =
+            1 -
+            Math.exp(
+                -18 * dt
+            );
+
+
+        segment.x =
+            lerp(
+                segment.x,
+                targetX,
+                follow
+            );
+
+
+        segment.y =
+            lerp(
+                segment.y,
+                targetY,
+                follow
+            );
+
+
+        /*
+            Segment direction.
+        */
+
+        segment.angle =
+            angle;
+    }
+
+
+    /* ========================================================
+       NATURAL BODY WAVE
+    ======================================================== */
+
+    /*
+        The body gently oscillates while moving.
+
+        It becomes stronger when the reptile
+        moves faster.
+    */
+
+    const movementAmount =
+        clamp(
+            headSpeed / 450,
+            0,
+            1
+        );
+
+
+    for (
+        let i = 2;
+        i < SEGMENTS - 1;
+        i++
+    ) {
+
+        const segment =
+            body[i];
+
+
+        const wave =
+            Math.sin(
+                time * 9 -
+                i * 0.55
+            ) *
+            movementAmount *
+            (i / SEGMENTS) *
+            1.8;
+
+
+        /*
+            Offset perpendicular to
+            the direction of the segment.
+        */
+
+        const perpendicular =
+            segment.angle +
+            Math.PI / 2;
+
+
+        segment.x +=
+            Math.cos(
+                perpendicular
+            ) *
+            wave *
+            dt *
+            7;
+
+
+        segment.y +=
+            Math.sin(
+                perpendicular
+            ) *
+            wave *
+            dt *
+            7;
+    }
+
+
+    /* ========================================================
+       DRAW
+    ======================================================== */
+
+    ctx.clearRect(
+        0,
+        0,
+        width,
+        height
+    );
+
+
+    drawGlow();
+
+    drawTail();
+
+    drawBody();
+
+    drawLegs();
+
+    drawHead();
+
+    drawEyes();
+
+
+    /*
+        Store current mouse state.
+    */
+
+    mouse.x =
+        head.x;
+
+    mouse.y =
+        head.y;
+}
+
+
+/* ============================================================
+   GLOW
+============================================================ */
+
+function drawGlow() {
+
+    const head =
+        body[0];
+
+
+    const gradient =
+        ctx.createRadialGradient(
+            head.x,
+            head.y,
+            0,
+            head.x,
+            head.y,
+            65
+        );
+
+
+    gradient.addColorStop(
+        0,
+        "rgba(100,220,120,.08)"
+    );
+
+
+    gradient.addColorStop(
+        1,
+        "rgba(100,220,120,0)"
+    );
+
+
+    ctx.fillStyle =
+        gradient;
+
+
+    ctx.beginPath();
+
+    ctx.arc(
+        head.x,
+        head.y,
+        65,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+}
+
+
+/* ============================================================
+   TAIL
+============================================================ */
+
+function drawTail() {
+
+    ctx.beginPath();
+
+
+    for (
+        let i = SEGMENTS - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const p =
+            body[i];
+
+
+        if (
+            i ===
+            SEGMENTS - 1
+        ) {
+
+            ctx.moveTo(
+                p.x,
+                p.y
+            );
+
+        } else {
+
+            ctx.lineTo(
+                p.x,
+                p.y
+            );
+        }
+    }
+
+
+    ctx.lineWidth = 5;
+
+    ctx.lineCap =
+        "round";
+
+    ctx.lineJoin =
+        "round";
+
+    ctx.strokeStyle =
+        "#243827";
+
+    ctx.stroke();
+
+
+    /*
+        Thin highlight.
+    */
+
+    ctx.beginPath();
+
+
+    for (
+        let i = SEGMENTS - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const p =
+            body[i];
+
+
+        if (
+            i ===
+            SEGMENTS - 1
+        ) {
+
+            ctx.moveTo(
+                p.x,
+                p.y
+            );
+
+        } else {
+
+            ctx.lineTo(
+                p.x,
+                p.y
+            );
+        }
+    }
+
+
+    ctx.lineWidth = 1.2;
+
+    ctx.strokeStyle =
+        "rgba(150,190,135,.38)";
+
+    ctx.stroke();
+}
+
+
+/* ============================================================
+   BODY
+============================================================ */
+
+function drawBody() {
+
+    for (
+        let i = SEGMENTS - 2;
+        i >= 1;
+        i--
+    ) {
+
+        const p =
+            body[i];
+
+
+        /*
+            Body gets gradually thinner.
+        */
+
+        const radius =
+            Math.max(
+                3,
+                9 -
+                i * 0.18
+            );
+
+
+        ctx.beginPath();
+
+        ctx.arc(
+            p.x,
+            p.y,
+            radius,
+            0,
+            Math.PI * 2
+        );
+
+
+        /*
+            Alternating subtle scales.
+        */
+
+        ctx.fillStyle =
+            i % 2 === 0
+                ? "#3b5d3d"
+                : "#304e34";
+
+        ctx.fill();
+
+
+        /*
+            Scale highlight.
+        */
+
+        ctx.beginPath();
+
+        ctx.arc(
+            p.x -
+            Math.cos(p.angle) * 1.5,
+
+            p.y -
+            Math.sin(p.angle) * 1.5,
+
+            radius * 0.35,
+
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "rgba(170,205,145,.25)";
+
+        ctx.fill();
+    }
+}
+
+
+/* ============================================================
+   LEGS
+============================================================ */
+
+function drawLegs() {
+
+    /*
+        Four pairs of legs.
+    */
+
+    const legPositions = [
+        4,
+        9,
+        14,
+        19,
+        24
+    ];
+
+
+    const head =
+        body[0];
+
+
+    const currentSpeed =
+        Math.sqrt(
+            head.vx * head.vx +
+            head.vy * head.vy
+        );
+
+
+    const movement =
+        clamp(
+            currentSpeed / 300,
+            0,
+            1
+        );
+
+
+    for (
+        let j = 0;
+        j < legPositions.length;
+        j++
+    ) {
+
+        const i =
+            legPositions[j];
+
+
+        if (
+            i >= SEGMENTS
+        ) {
+
+            continue;
+        }
+
+
+        const p =
+            body[i];
+
+
+        /*
+            Each body section has
+            legs on both sides.
+        */
+
+        drawLeg(
+            p,
+            1,
+            j,
+            movement
+        );
+
+
+        drawLeg(
+            p,
+            -1,
+            j,
+            movement
+        );
+    }
+}
+
+
+function drawLeg(
+    p,
+    side,
+    index,
+    movement
+) {
+
+    const perpendicular =
+        p.angle +
+        Math.PI / 2;
+
+
+    /*
+        Gentle walking wave.
+    */
+
+    const step =
+        Math.sin(
+            time * 10 +
+            index * 1.7
+        ) *
+        movement;
+
+
+    const baseX =
+        p.x +
+        Math.cos(
+            perpendicular
+        ) *
+        side *
+        5;
+
+
+    const baseY =
+        p.y +
+        Math.sin(
+            perpendicular
+        ) *
+        side *
+        5;
+
+
+    const elbowDistance =
+        12 +
+        step * 3;
+
+
+    const elbowX =
+        p.x +
+        Math.cos(
+            perpendicular
+        ) *
+        side *
+        elbowDistance;
+
+
+    const elbowY =
+        p.y +
+        Math.sin(
+            perpendicular
+        ) *
+        side *
+        elbowDistance;
+
+
+    const footX =
+        elbowX +
+        Math.cos(
+            p.angle
+        ) *
+        (5 + step * 2);
+
+
+    const footY =
+        elbowY +
+        Math.sin(
+            p.angle
+        ) *
+        (5 + step * 2);
+
+
+    /*
+        Upper leg.
+    */
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        baseX,
+        baseY
+    );
+
+    ctx.lineTo(
+        elbowX,
+        elbowY
+    );
+
+    ctx.lineTo(
+        footX,
+        footY
+    );
+
+
+    ctx.lineWidth = 2.3;
+
+    ctx.lineCap =
+        "round";
+
+    ctx.lineJoin =
+        "round";
+
+    ctx.strokeStyle =
+        "#345039";
+
+    ctx.stroke();
+
+
+    /*
+        Small claws.
+    */
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        footX,
+        footY
+    );
+
+
+    ctx.lineTo(
+        footX +
+        Math.cos(
+            p.angle + 0.45
+        ) * 4,
+
+        footY +
+        Math.sin(
+            p.angle + 0.45
+        ) * 4
+    );
+
+
+    ctx.moveTo(
+        footX,
+        footY
+    );
+
+
+    ctx.lineTo(
+        footX +
+        Math.cos(
+            p.angle - 0.45
+        ) * 4,
+
+        footY +
+        Math.sin(
+            p.angle - 0.45
+        ) * 4
+    );
+
+
+    ctx.lineWidth = 0.9;
+
+    ctx.strokeStyle =
+        "rgba(160,190,145,.55)";
+
+    ctx.stroke();
+}
+
+
+/* ============================================================
+   HEAD
+============================================================ */
+
+function drawHead() {
+
+    const head =
+        body[0];
+
+
+    ctx.save();
+
+
+    ctx.translate(
+        head.x,
+        head.y
+    );
+
+
+    ctx.rotate(
+        head.angle
+    );
+
+
+    /*
+        Neck.
+    */
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        -5,
+        0,
+        13,
+        10,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+        "#3b5e3e";
+
+    ctx.fill();
+
+
+    /*
+        Main head.
+    */
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        18,
+        0
+    );
+
+
+    ctx.quadraticCurveTo(
+        10,
+        -12,
+        -5,
+        -10
+    );
+
+
+    ctx.quadraticCurveTo(
+        -15,
+        0,
+        -5,
+        10
+    );
+
+
+    ctx.quadraticCurveTo(
+        10,
+        12,
+        18,
+        0
+    );
+
+
+    ctx.fillStyle =
+        "#466e47";
+
+    ctx.fill();
+
+
+    /*
+        Snout.
+    */
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        13,
+        0,
+        8,
+        5.5,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+        "#527c50";
+
+    ctx.fill();
+
+
+    /*
+        Mouth.
+    */
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        8,
+        4
+    );
+
+
+    ctx.quadraticCurveTo(
+        15,
+        6,
+        20,
+        1
+    );
+
+
+    ctx.lineWidth = 1;
+
+    ctx.strokeStyle =
+        "rgba(18,30,20,.85)";
+
+    ctx.stroke();
+
+
+    /*
+        Nose.
+    */
+
+    ctx.beginPath();
+
+    ctx.arc(
+        19,
+        -2.5,
+        1,
+        0,
+        Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+        "#111b12";
+
+    ctx.fill();
+
+
+    ctx.restore();
+}
+
+
+/* ============================================================
+   EYES
+============================================================ */
+
+function drawEyes() {
+
+    const head =
+        body[0];
+
+
+    const angle =
+        head.angle;
+
+
+    const sideAngle =
+        angle +
+        Math.PI / 2;
+
+
+    const distance =
+        6.8;
+
+
+    for (
+        const side of [-1, 1]
+    ) {
+
+        const x =
+            head.x +
+            Math.cos(angle) * 7 +
+            Math.cos(sideAngle) *
+            side *
+            distance;
+
+
+        const y =
+            head.y +
+            Math.sin(angle) * 7 +
+            Math.sin(sideAngle) *
+            side *
+            distance;
+
+
+        /*
+            Eye socket.
+        */
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            y,
+            4,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "#0d160e";
+
+        ctx.fill();
+
+
+        /*
+            Golden eye.
+        */
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            y,
+            2.45,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "#c5b449";
+
+        ctx.fill();
+
+
+        /*
+            Vertical pupil.
+        */
+
+        ctx.beginPath();
+
+        ctx.ellipse(
+            x,
+            y,
+            0.85,
+            2,
+            0,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "#000000";
+
+        ctx.fill();
+
+
+        /*
+            Tiny reflection.
+        */
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x - 0.7,
+            y - 0.7,
+            0.5,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "#ffffff";
+
+        ctx.fill();
+    }
+}
+
+
+/* ============================================================
+   START
+============================================================ */
+
+requestAnimationFrame(
+    animate
+);
+
+
+/* ============================================================
+   RESIZE
+============================================================ */
+
+window.addEventListener(
+    "resize",
+    () => {
+
+        resize();
+
+        /*
+            Keep the reptile positioned
+            correctly after resizing.
+        */
+
+        if (body.length) {
+
+            const head =
+                body[0];
+
+            head.x =
+                clamp(
+                    head.x,
+                    0,
+                    window.innerWidth
+                );
+
+            head.y =
+                clamp(
+                    head.y,
+                    0,
+                    window.innerHeight
+                );
+        }
+    }
+);
+
+</script>
+
+</body>
+</html>
+```
